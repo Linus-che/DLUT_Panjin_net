@@ -120,9 +120,3 @@ chmod +x dlut_net.sh.sh
 本项目采用 [MIT License](LICENSE)，可自由使用和修改，请保留原作者署名。
 
 ---
-
-```
-
----
-
-```
