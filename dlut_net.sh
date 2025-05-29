@@ -1,6 +1,32 @@
 #!/bin/bash
 
-# 参数示例：-a login -u 用户名 -p 密码 -d dianxin [-i 网口名]
+print_error_info() {
+  echo "⚠️ 登录状态未知，请检查网络或参数。"
+  echo
+  echo "当前网络接口及其IP（排除回环）:"
+  ip addr | awk '
+    $1 ~ /^[0-9]+:/ { iface=$2 }
+    iface !~ /^lo/ && /inet / {
+      split($2, a, "/")
+      ip=a[1]
+      if (ip !~ /^127\./) {
+        sub(":", "", iface)
+        print "  接口: " iface ", IP: " ip
+      }
+    }
+  '
+  echo
+  echo "常见运营商域名参数示例："
+  echo "  电信: dianxin"
+  echo "  联通: liantong"
+  echo "  移动: yidong"
+  echo "  教育网: jiaoyu"
+  echo
+  echo "脚本示例："
+  echo "  $0 -a login -u 用户名 -p 密码 -d dianxin [-i 网口名]"
+  echo
+  echo "如果你不确定可用的网口名称，可使用 -i 参数指定。"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -9,21 +35,32 @@ while [[ $# -gt 0 ]]; do
     -p) PASSWORD="$2"; shift 2;;
     -d) DOMAIN="$2"; shift 2;;
     -i) INTERFACE="$2"; shift 2;;
-    *) echo "Unknown parameter: $1"; exit 1;;
+    *) echo "未知参数: $1"; exit 1;;
   esac
 done
 
 if [[ -z "$ACTION" || -z "$USERNAME" || -z "$PASSWORD" || -z "$DOMAIN" ]]; then
-  echo "Usage: $0 -a {login,logout} -u USERNAME -p PASSWORD -d DOMAIN [-i INTERFACE]"
+  echo "用法: $0 -a {login,logout} -u 用户名 -p 密码 -d 域名 [-i 网口名]"
   exit 1
 fi
 
-# 默认接口自动选择，如果指定则用指定
+# 选择网络接口，排除lo和回环IP
 if [[ -n "$INTERFACE" ]]; then
   NET_INTERFACE="$INTERFACE"
 else
-  # 取第一个非lo的网口（macOS 和 Linux 都适用）
-  NET_INTERFACE=$(ip addr | awk '/state UP/ && $2 !~ /lo/ {print $2}' | sed 's/://g' | head -n 1)
+  # 取第一个非lo且IP不为127.x.x.x的接口（Linux和macOS通用）
+  NET_INTERFACE=$(ip addr | awk '
+    $1 ~ /^[0-9]+:/ { iface=$2 }
+    iface !~ /^lo/ && /inet / {
+      split($2, a, "/")
+      ip=a[1]
+      if (ip !~ /^127\./) {
+        sub(":", "", iface)
+        print iface
+        exit
+      }
+    }
+  ')
 fi
 
 if [[ -z "$NET_INTERFACE" ]]; then
@@ -31,9 +68,7 @@ if [[ -z "$NET_INTERFACE" ]]; then
   exit 1
 fi
 
-# 获取该接口的IPv4地址
-LOCAL_IP=$(ip -4 addr show "$NET_INTERFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
-
+LOCAL_IP=$(ip -4 addr show "$NET_INTERFACE" 2>/dev/null | grep -oE 'inet ([0-9]+\.){3}[0-9]+' | awk '{print $2}' | head -n 1)
 if [[ -z "$LOCAL_IP" ]]; then
   echo "⚠️ 网络接口 $NET_INTERFACE 没有IPv4地址"
   exit 1
@@ -59,7 +94,6 @@ echo "使用网络接口: $NET_INTERFACE"
 echo "本地IP地址: $LOCAL_IP"
 echo "请求动作: $ACTION"
 
-# 构造curl命令
 CURL_CMD=(curl -s --interface "$NET_INTERFACE" -X POST "$URL" \
   -H "Content-Type: $CONTENT_TYPE" \
   -H "Origin: $ORIGIN" \
@@ -68,20 +102,12 @@ CURL_CMD=(curl -s --interface "$NET_INTERFACE" -X POST "$URL" \
   --data "$POST_DATA" \
   --max-time 10)
 
-# 执行请求
 RESPONSE=$("${CURL_CMD[@]}")
 
-# 调试模式下打印完整响应（默认不打印）
-if [[ "$DEBUG" == "1" ]]; then
-  echo "服务器响应:"
-  echo "$RESPONSE"
-fi
-
-# 简单判断结果（根据实际响应内容修改）
 if echo "$RESPONSE" | grep -q "网络已连接"; then
   echo "✅ 登录成功"
 elif echo "$RESPONSE" | grep -q "网络已断开"; then
   echo "✅ 注销成功"
 else
-  echo "⚠️ 登录状态未知，请检查网络或参数。"
+  print_error_info
 fi
