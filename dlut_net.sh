@@ -4,17 +4,21 @@ print_error_info() {
   echo "⚠️ 登录状态未知，请检查网络或参数。"
   echo
   echo "当前网络接口及其IP（排除回环）:"
-  ip addr | awk '
-    $1 ~ /^[0-9]+:/ { iface=$2 }
-    iface !~ /^lo/ && /inet / {
-      split($2, a, "/")
-      ip=a[1]
-      if (ip !~ /^127\./) {
-        sub(":", "", iface)
-        print "  接口: " iface ", IP: " ip
+  if [[ "$OS" == "Darwin" ]]; then
+    ifconfig | awk '/flags=/{iface=$1} /inet / && $2 !~ /^127/ {print "  接口: " iface ", IP: " $2}'
+  else
+    ip addr | awk '
+      $1 ~ /^[0-9]+:/ { iface=$2 }
+      iface !~ /^lo/ && /inet / {
+        split($2, a, "/")
+        ip=a[1]
+        if (ip !~ /^127\./) {
+          sub(":", "", iface)
+          print "  接口: " iface ", IP: " ip
+        }
       }
-    }
-  '
+    '
+  fi
   echo
   echo "常见运营商域名参数示例："
   echo "  电信: dianxin"
@@ -28,6 +32,7 @@ print_error_info() {
   echo "如果你不确定可用的网口名称，可使用 -i 参数指定。"
 }
 
+# 解析参数
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -a) ACTION="$2"; shift 2;;
@@ -39,28 +44,34 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# 检查必要参数
 if [[ -z "$ACTION" || -z "$USERNAME" || -z "$PASSWORD" || -z "$DOMAIN" ]]; then
   echo "用法: $0 -a {login,logout} -u 用户名 -p 密码 -d 域名 [-i 网口名]"
   exit 1
 fi
 
-# 选择网络接口，排除lo和回环IP
+OS=$(uname)
+
+# 选择网络接口
 if [[ -n "$INTERFACE" ]]; then
   NET_INTERFACE="$INTERFACE"
 else
-  # 取第一个非lo且IP不为127.x.x.x的接口（Linux和macOS通用）
-  NET_INTERFACE=$(ip addr | awk '
-    $1 ~ /^[0-9]+:/ { iface=$2 }
-    iface !~ /^lo/ && /inet / {
-      split($2, a, "/")
-      ip=a[1]
-      if (ip !~ /^127\./) {
-        sub(":", "", iface)
-        print iface
-        exit
+  if [[ "$OS" == "Darwin" ]]; then
+    NET_INTERFACE=$(ifconfig | awk '/flags=/{gsub(":", "", $1); iface=$1} /inet / && $2 !~ /^127/ {print iface; exit}')
+  else
+    NET_INTERFACE=$(ip addr | awk '
+      $1 ~ /^[0-9]+:/ { iface=$2 }
+      iface !~ /^lo/ && /inet / {
+        split($2, a, "/")
+        ip=a[1]
+        if (ip !~ /^127\./) {
+          sub(":", "", iface)
+          print iface
+          exit
+        }
       }
-    }
-  ')
+    ')
+  fi
 fi
 
 if [[ -z "$NET_INTERFACE" ]]; then
@@ -68,14 +79,19 @@ if [[ -z "$NET_INTERFACE" ]]; then
   exit 1
 fi
 
-LOCAL_IP=$(ip -4 addr show "$NET_INTERFACE" 2>/dev/null | grep -oE 'inet ([0-9]+\.){3}[0-9]+' | awk '{print $2}' | head -n 1)
+# 获取本地IP
+if [[ "$OS" == "Darwin" ]]; then
+  LOCAL_IP=$(ifconfig "$NET_INTERFACE" 2>/dev/null | awk '/inet / && $2 !~ /^127/ {print $2; exit}')
+else
+  LOCAL_IP=$(ip -4 addr show "$NET_INTERFACE" 2>/dev/null | grep -oE 'inet ([0-9]+\.){3}[0-9]+' | awk '{print $2}' | head -n 1)
+fi
+
 if [[ -z "$LOCAL_IP" ]]; then
   echo "⚠️ 网络接口 $NET_INTERFACE 没有IPv4地址"
   exit 1
 fi
 
 URL='http://172.17.3.10/srun_portal_pc.php?ac_id=1'
-
 CONTENT_TYPE="application/x-www-form-urlencoded"
 ORIGIN="http://172.17.3.10/"
 REFERER="http://172.17.3.10/"
